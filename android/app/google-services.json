@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "238609870411",
+    "project_id": "ecofix-473fe",
+    "storage_bucket": "ecofix-473fe.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:238609870411:android:f769f41508ac5cb537a7ce",
+        "android_client_info": {
+          "package_name": "com.example.ecofix"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDfrB1An8GFg07bj7oDM4HrHI-8L8rohjs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
