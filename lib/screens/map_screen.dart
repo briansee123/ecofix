@@ -101,6 +101,8 @@ class _MapScreenState extends State<MapScreen> {
             options: MapOptions(
               initialCenter: _mapCenter,
               initialZoom: 16.0,
+              // 💡 Key: Add interactionOptions to prevent gesture conflicts causing crash
+              interactionOptions: const InteractionOptions(flags: InteractiveFlag.all),
             ),
             children: [
               TileLayer(

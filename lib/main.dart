@@ -1,3 +1,4 @@
+import 'package:ecofix/services/diagnosis_service.dart';
 import 'package:flutter/material.dart';
 import 'package:google_generative_ai/google_generative_ai.dart';
 import 'screens/map_screen.dart';
@@ -148,38 +149,36 @@ class _AiScannerScreenState extends State<AiScannerScreen> {
     });
 
     try {
-      final model = GenerativeModel(
-        model: 'gemini-2.5-flash',
-        apiKey: apiKey, 
-      );
-
-      // 🧠 AI moat: Added strict anti-profanity/anti-nonsense rules!
+      final model = GenerativeModel(model: 'gemini-2.5-flash', apiKey: apiKey);
       final prompt = '''
-      You are an elite cyber-repair technician AI named "REPAIR CORE".
-      The user reports this problem: ${_issueController.text}
+You are an elite cyber-repair technician AI named "REPAIR CORE".
+The user reports this problem: ${_issueController.text}
 
-      CRITICAL RULES:
-      1. If the user input contains profanity, swearing, offensive language, or is complete nonsense (e.g., keyboard smashing like "asdasd", or totally unrelated topics like "what is 1+1"), YOU MUST ONLY REPLY WITH EXACTLY ONE WORD: "Invalid". Do not add any other text.
-      2. If the user asks about human medical issues (like "my brain hurts"), politely tell them you only repair electronics/appliances.
-      
-      If it is a valid repair question, provide:
-      1. **🔍 Likely Causes** 2. **🛠️ Step-by-Step Eco-Repair Guide** 3. **🧰 Tools Needed** 4. **⚠️ Safety Warnings**
-      Format it beautifully with Markdown.
-      ''';
-
+CRITICAL RULES:
+1. If the user input contains profanity, inappropriate content, or is not related to electronic/appliance repair, respond with exactly "Invalid".
+2. For valid repair queries, provide step-by-step diagnosis and repair instructions.
+3. Keep responses concise but informative.
+4. Use technical language appropriate for repair technicians.
+''';
       final response = await model.generateContent([Content.text(prompt)]);
+      
+      final resultText = response.text?.trim() ?? 'System returned empty result.';
 
       setState(() {
-        _diagnosisResult = response.text?.trim() ?? 'System returned empty result.';
+        _diagnosisResult = resultText;
       });
+
+      // ✅ Fix: After getting AI result, save only if not Invalid
+      if (resultText != "Invalid") {
+        await DiagnosisService.saveDiagnosis(
+          _issueController.text.split(' ').take(3).join(' '), 
+          _issueController.text
+        );
+      }
     } catch (e) {
-      setState(() {
-        _diagnosisResult = '📡 CONNECTION LOST. \nError details: $e';
-      });
+      setState(() { _diagnosisResult = '📡 CONNECTION LOST. \nError details: $e'; });
     } finally {
-      setState(() {
-        _isLoading = false;
-      });
+      setState(() { _isLoading = false; });
     }
   }
 
@@ -192,13 +191,13 @@ class _AiScannerScreenState extends State<AiScannerScreen> {
         backgroundColor: const Color(0xFF1A212E),
         foregroundColor: Colors.white,
       ),
-      backgroundColor: const Color(0xFF0D121C), // 保持赛博底色
+      backgroundColor: const Color(0xFF0D121C), // Keep cyber background color
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(20.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 🌟 顶端专属问候语！
+            // 🌟 Exclusive greeting at the top!
             Text(
               "Hi, ${_userName}_",
               style: const TextStyle(color: Color(0xFF00E5FF), fontSize: 28, fontWeight: FontWeight.w900, letterSpacing: 1.2),
@@ -328,93 +327,75 @@ class EcoProfileScreen extends StatefulWidget {
 }
 
 class _EcoProfileScreenState extends State<EcoProfileScreen> {
-  List<Map<String, dynamic>> _historyList = [];
+  // 1. Variable definitions (fix all Undefined name errors)
+  List<Map<String, dynamic>> _historyList = [];   // Map check-in history
+  List<Map<String, dynamic>> _aiHistoryList = []; // AI diagnosis history
   bool _isLoading = true;
-  bool _isGeneratingImage = false;
-  String? _generatedImageUrl;
-
-  // 🌟 Identity manager: Determine if current user is a guest
   User? _currentUser;
+
+  // 🌟 二次元头像系统变量
+  String _currentAvatarUrl = 'https://api.dicebear.com/7.x/adventurer/png?seed=EcoWarrior'; 
+  List<String> _unlockedAvatars = []; // 储存已解锁的头像URL
+  bool _isGeneratingAvatar = false;
+
+  // 🎨 二次元头像库 (Dicebear API 极其稳定)
+  final List<String> _avatarPool = [
+    'https://api.dicebear.com/7.x/adventurer/png?seed=Felix',
+    'https://api.dicebear.com/7.x/adventurer/png?seed=Milo',
+    'https://api.dicebear.com/7.x/adventurer/png?seed=Luna',
+    'https://api.dicebear.com/7.x/adventurer/png?seed=Aria',
+    'https://api.dicebear.com/7.x/adventurer/png?seed=Zoe',
+  ];
 
   @override
   void initState() {
     super.initState();
-    _currentUser = FirebaseAuth.instance.currentUser; // Check credentials: See who is logged in
-    
-    // Only read history if it's a real user
+    _currentUser = FirebaseAuth.instance.currentUser;
     if (_currentUser != null) {
-      _loadHistory(); 
+      _loadHistory();
     } else {
-      _isLoading = false; // Guest doesn't need to load data
+      _isLoading = false;
     }
   }
 
   Future<void> _loadHistory() async {
-    final history = await CheckInService.getHistory();
-    setState(() {
-      _historyList = history;
-      _isLoading = false;
-    });
+    if (_currentUser == null) return;
+    try {
+      final history = await CheckInService.getHistory();
+      final aiHistory = await DiagnosisService.getHistory(); 
+      if (mounted) {
+        setState(() {
+          _historyList = history;
+          _aiHistoryList = aiHistory;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() { _isLoading = false; });
+    }
   }
 
-  Future<void> _generateAIImage() async {
-    setState(() { _isGeneratingImage = true; });
-    await Future.delayed(const Duration(seconds: 3));
+  // 🌟 召唤头像逻辑
+  Future<void> _generateAvatar() async {
+    if (_isGeneratingAvatar || _unlockedAvatars.length >= 5) return;
+    setState(() { _isGeneratingAvatar = true; });
+    await Future.delayed(const Duration(milliseconds: 1500)); 
     setState(() {
-      _isGeneratingImage = false;
-      // 真实废弃电子产品的高清图
-      _generatedImageUrl = 'https://images.unsplash.com/photo-1550989460-0adf9ea622e2?q=80&w=600&auto=format&fit=crop';
+      _isGeneratingAvatar = false;
+      String newAvatar = (_avatarPool..shuffle()).first;
+      if (!_unlockedAvatars.contains(newAvatar)) {
+        _unlockedAvatars.add(newAvatar);
+      }
     });
   }
 
   @override
   Widget build(BuildContext context) {
-    // 🛑 Core logic 1: If it's a guest (Guest), intercept directly and show registration guide page!
-    if (_currentUser == null) {
-      return Scaffold(
-        backgroundColor: const Color(0xFF0D1117),
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(30.0),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(Icons.lock_outline, size: 80, color: Colors.blueGrey),
-                const SizedBox(height: 20),
-                const Text("RESTRICTED AREA", style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold, letterSpacing: 2)),
-                const SizedBox(height: 10),
-                const Text("You are currently in Guest Mode.\nNot a member yet? Sign up now to track your Eco-Impact and unlock the AI Archive!", 
-                  textAlign: TextAlign.center, style: TextStyle(color: Colors.grey, height: 1.5)
-                ),
-                const SizedBox(height: 40),
-                SizedBox(
-                  width: double.infinity,
-                  height: 50,
-                  child: ElevatedButton.icon(
-                    onPressed: () {
-                      // Send back to login page (Module D)
-                      Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const LoginScreen()));
-                    },
-                    icon: const Icon(Icons.login),
-                    label: const Text("LOGIN / SIGN UP", style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1)),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.purpleAccent,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                    ),
-                  ),
-                )
-              ],
-            ),
-          ),
-        ),
-      );
-    }
+    if (_currentUser == null) return _buildGuestLock();
 
-    // ✅ Core logic 2: If it's a real user, show the complete Dashboard!
-    int totalCheckIns = _historyList.length;
-    double co2Saved = totalCheckIns * 5.5 + (_generatedImageUrl != null ? 12.0 : 0); 
-    String displayName = _currentUser!.displayName ?? _currentUser!.email?.split('@')[0] ?? "EcoWarrior";
+    int aiPoints = _aiHistoryList.length * 10; // 每次 AI 诊断得 10 分
+    int totalActions = _historyList.length + _aiHistoryList.length;
+    String displayName = _currentUser!.displayName ?? "EcoWarrior";
 
     return Scaffold(
       appBar: AppBar(
@@ -422,163 +403,276 @@ class _EcoProfileScreenState extends State<EcoProfileScreen> {
         backgroundColor: const Color(0xFF1A212E),
         foregroundColor: Colors.white,
       ),
-      backgroundColor: const Color(0xFF0D1117), 
+      backgroundColor: const Color(0xFF0D1117),
       body: _isLoading 
-        ? const Center(child: CircularProgressIndicator(color: Colors.green))
-        : SingleChildScrollView(
-            padding: const EdgeInsets.all(20.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // 🌟 顶部：身份展示栏
-                Container(
-                  padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 15),
-                  decoration: BoxDecoration(color: Colors.blueAccent.withOpacity(0.1), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.blueAccent.withOpacity(0.3))),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.verified_user, color: Colors.blueAccent, size: 20),
-                      const SizedBox(width: 10),
-                      Text("Signed in as: $displayName", style: const TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold)),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 20),
+        ? const Center(child: CircularProgressIndicator(color: Color(0xFF00E5FF)))
+        : RefreshIndicator(
+            onRefresh: _loadHistory,
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(20.0),
+              child: Column(
+                children: [
+                  _buildIdentityHeader(displayName),
+                  const SizedBox(height: 25),
+                  
+                  // 🌟 头像预览与更换
+                  _buildAvatarSection(),
+                  const SizedBox(height: 25),
 
-                // --- 1. 动态成就卡片 ---
-                Container(
-                  padding: const EdgeInsets.all(25),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(colors: [Colors.green[700]!, Colors.teal[500]!]),
-                    borderRadius: BorderRadius.circular(15),
-                    boxShadow: [BoxShadow(color: Colors.green.withOpacity(0.3), blurRadius: 15, offset: const Offset(0, 5))],
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text('Total Eco Actions', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-                      Text('$totalCheckIns', style: const TextStyle(color: Colors.white, fontSize: 45, fontWeight: FontWeight.w900)),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 20),
-                
-                // --- 2. 纯手工打造的赛博柱状图 (Bar Chart) ---
-                const Text("ACTIVITY METRICS", style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold, letterSpacing: 1.2)),
-                const SizedBox(height: 10),
-                Container(
-                  height: 150,
-                  padding: const EdgeInsets.all(15),
-                  decoration: BoxDecoration(color: const Color(0xFF1A212E), borderRadius: BorderRadius.circular(15)),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      _buildCyberBar('Mon', 0.3, Colors.blue),
-                      _buildCyberBar('Tue', 0.7, Colors.green),
-                      _buildCyberBar('Wed', 0.4, Colors.purple),
-                      _buildCyberBar('Thu', 0.9, Colors.orange), // 假设周四最活跃
-                      _buildCyberBar('Fri', 0.5, Colors.teal),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 30),
+                  _buildAchievementCard(totalActions),
+                  const SizedBox(height: 30),
 
-                // --- 3. AI 档案与盲盒生成 ---
-                const Text("AI DIAGNOSIS ARCHIVE", style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold, letterSpacing: 1.2)),
-                const SizedBox(height: 10),
-                Card(
-                  color: const Color(0xFF1A212E),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), side: BorderSide(color: Colors.blueAccent.withOpacity(0.3))),
-                  child: Padding(
-                    padding: const EdgeInsets.all(15.0),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Row(
-                          children: [
-                            Icon(Icons.smart_toy, color: Colors.blueAccent),
-                            SizedBox(width: 10),
-                            Text("Dyson Hairdryer V8", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-                          ],
-                        ),
-                        const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 10),
-                          child: Text("Symptoms: Outer casing severely cracked. Emitting burning plastic smell when turned on.", style: TextStyle(color: Colors.grey, fontSize: 13)),
-                        ),
-                        
-                        if (_generatedImageUrl != null)
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 15),
-                            child: ClipRRect(borderRadius: BorderRadius.circular(10), child: Image.network(_generatedImageUrl!, width: double.infinity, height: 200, fit: BoxFit.cover)),
-                          ),
+                  // 🌟 AI 积分奖励区
+                  _buildAiAchievePointSection(aiPoints),
+                  const SizedBox(height: 30),
 
-                        SizedBox(
-                          width: double.infinity,
-                          child: ElevatedButton.icon(
-                            onPressed: _isGeneratingImage || _generatedImageUrl != null ? null : _generateAIImage,
-                            icon: _isGeneratingImage 
-                                ? const SizedBox(width: 15, height: 15, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                                : const Icon(Icons.auto_awesome),
-                            label: Text(_generatedImageUrl != null ? "Visual Generated" : "Generate Cyber Visual"),
-                            style: ElevatedButton.styleFrom(backgroundColor: Colors.purpleAccent, foregroundColor: Colors.white, disabledBackgroundColor: Colors.grey[800]),
-                          ),
-                        ),
-                      ],
-                    ),
+                  const Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text("FIX HISTORY (STATIONS)", style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold, letterSpacing: 1.2)),
                   ),
-                ),
-                const SizedBox(height: 30),
-
-                // --- 4. Offline check-in history (limit to max 10 entries) ---
-                const Text("STATION CHECK-INS", style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold, letterSpacing: 1.2)),
-                const SizedBox(height: 10),
-                
-                _historyList.isEmpty
-                  ? Center(child: Padding(padding: const EdgeInsets.all(20), child: Text("No check-ins yet.", style: TextStyle(color: Colors.grey.withOpacity(0.5)))))
-                  : ListView.builder(
-                      shrinkWrap: true, 
-                      physics: const NeverScrollableScrollPhysics(), 
-                      // Limit to display max 10 records
-                      itemCount: _historyList.length > 10 ? 10 : _historyList.length,
-                      itemBuilder: (context, index) {
-                        final item = _historyList[_historyList.length - 1 - index];
-                        return Card(
-                          color: const Color(0xFF1A212E),
-                          margin: const EdgeInsets.only(bottom: 12),
-                          child: ListTile(
-                            leading: CircleAvatar(backgroundColor: Colors.green.withOpacity(0.2), child: const Icon(Icons.location_on, color: Colors.green)),
-                            title: Text(item['location'] ?? 'Unknown', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.white)),
-                            subtitle: Text(item['time'] ?? 'Unknown Time', style: const TextStyle(color: Colors.grey, fontSize: 12)),
-                            trailing: const Icon(Icons.check_circle, color: Colors.green),
-                          ),
-                        );
-                      },
-                    ),
-              ],
+                  const SizedBox(height: 10),
+                  _buildCheckInList(),
+                ],
+              ),
             ),
           ),
     );
   }
 
-  // 🛠️ 纯手工绘制的柱状图组件 (完全不需要加第三方包！)
-  Widget _buildCyberBar(String day, double heightRatio, Color color) {
+  // --- UI sub-components (ensure all defined inside class, fix Expected a method error) ---
+
+  Widget _buildIdentityHeader(String name) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 15),
+      decoration: BoxDecoration(color: Colors.blueAccent.withOpacity(0.1), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.blueAccent.withOpacity(0.3))),
+      child: Row(children: [const Icon(Icons.verified_user, color: Colors.blueAccent, size: 20), const SizedBox(width: 10), Text("Signed in as: $name", style: const TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold))]),
+    );
+  }
+
+  Widget _buildAvatarSection() {
     return Column(
-      mainAxisAlignment: MainAxisAlignment.end,
       children: [
-        AnimatedContainer(
-          duration: const Duration(milliseconds: 800),
-          curve: Curves.easeOutQuart,
-          width: 25,
-          height: 100 * heightRatio, // 最大高度100
-          decoration: BoxDecoration(
-            color: color.withOpacity(0.8),
-            borderRadius: BorderRadius.circular(5),
-            boxShadow: [BoxShadow(color: color.withOpacity(0.4), blurRadius: 8, offset: const Offset(0, -2))],
-          ),
+        CircleAvatar(
+          radius: 55,
+          backgroundColor: const Color(0xFF00E5FF).withOpacity(0.1),
+          backgroundImage: NetworkImage(_currentAvatarUrl),
         ),
         const SizedBox(height: 8),
-        Text(day, style: const TextStyle(color: Colors.grey, fontSize: 12, fontWeight: FontWeight.bold)),
+        TextButton.icon(
+          onPressed: () => _showAvatarPicker(),
+          icon: const Icon(Icons.style, size: 16),
+          label: const Text("CHANGE ENTITY ICON", style: TextStyle(color: Color(0xFF00E5FF), fontSize: 12, letterSpacing: 1.5, fontWeight: FontWeight.bold)),
+        ),
       ],
     );
   }
-}
+
+  Widget _buildAiAchievePointSection(int points) {
+    return Card(
+      color: const Color(0xFF1A212E),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), side: const BorderSide(color: Colors.purpleAccent, width: 1)),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text("AI ACHIEVE POINT", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                Text("$points PT", style: const TextStyle(color: Colors.purpleAccent, fontSize: 22, fontWeight: FontWeight.w900)),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Align(alignment: Alignment.centerLeft, child: Text("Unlocked: ${_unlockedAvatars.length}/5 Icons", style: const TextStyle(color: Colors.grey, fontSize: 12))),
+            const SizedBox(height: 20),
+            SizedBox(
+              width: double.infinity,
+              height: 50,
+              child: ElevatedButton.icon(
+                onPressed: (points >= 10 && _unlockedAvatars.length < 5) ? _generateAvatar : null,
+                icon: _isGeneratingAvatar 
+                    ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                    : const Icon(Icons.auto_awesome),
+                label: Text(_isGeneratingAvatar ? "RECONSTRUCTING..." : "SPEND 10 PT TO SUMMON ICON"),
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.purpleAccent, foregroundColor: Colors.white, disabledBackgroundColor: Colors.grey[800]),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAchievementCard(int count) {
+    return Container(
+      padding: const EdgeInsets.all(25),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(colors: [Colors.green[700]!, Colors.teal[500]!]),
+        borderRadius: BorderRadius.circular(15),
+        boxShadow: [BoxShadow(color: Colors.green.withOpacity(0.2), blurRadius: 15)],
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          const Text('Total Eco Actions', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+          Text('$count', style: const TextStyle(color: Colors.white, fontSize: 45, fontWeight: FontWeight.w900)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAiArchiveCard(String name, String issue) {
+    return Card(
+      color: const Color(0xFF1A212E),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), side: BorderSide(color: Colors.blueAccent.withOpacity(0.3))),
+      child: Padding(
+        padding: const EdgeInsets.all(15.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [const Icon(Icons.smart_toy, color: Colors.blueAccent), const SizedBox(width: 10), Expanded(child: Text(name, style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)))]),
+            Padding(padding: const EdgeInsets.symmetric(vertical: 10), child: Text("Issue: $issue", style: const TextStyle(color: Colors.grey, fontSize: 13), maxLines: 2, overflow: TextOverflow.ellipsis)),
+            
+            if (_unlockedAvatars.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 15),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: Image.network(
+                    _unlockedAvatars.last,
+                    width: double.infinity,
+                    height: 180,
+                    fit: BoxFit.cover,
+                    // Add this block to catch 404/500 errors
+                    errorBuilder: (context, error, stackTrace) {
+                      return Container(
+                        height: 180,
+                        color: Colors.grey[900],
+                        child: const Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.broken_image, color: Colors.grey, size: 40),
+                            SizedBox(height: 10),
+                            Text("Visual data corrupted.", style: TextStyle(color: Colors.grey)),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ),
+
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _isGeneratingAvatar || _unlockedAvatars.length >= 5 ? null : _generateAvatar,
+                icon: _isGeneratingAvatar 
+                    ? const SizedBox(width: 15, height: 15, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                    : const Icon(Icons.auto_awesome),
+                label: Text(_unlockedAvatars.length >= 5 ? "All Avatars Unlocked" : "Unlock New Avatar"),
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.purpleAccent, foregroundColor: Colors.white, disabledBackgroundColor: Colors.grey[800]),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCheckInList() {
+    if (_historyList.isEmpty) return _buildEmptyBox("No data logs detected.");
+    return ListView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: _historyList.length > 5 ? 5 : _historyList.length,
+      itemBuilder: (context, index) {
+        final item = _historyList[_historyList.length - 1 - index];
+        return Card(
+          color: const Color(0xFF1A212E),
+          margin: const EdgeInsets.only(bottom: 12),
+          child: ListTile(
+            leading: const CircleAvatar(backgroundColor: Colors.green, radius: 15, child: Icon(Icons.check, color: Colors.white, size: 16)),
+            title: Text(item['location'] ?? 'Unknown Station', style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold)),
+            subtitle: Text(item['time'] ?? '', style: const TextStyle(color: Colors.grey, fontSize: 11)),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildEmptyBox(String text) {
+    return Container(width: double.infinity, padding: const EdgeInsets.all(40), decoration: BoxDecoration(color: const Color(0xFF1A212E), borderRadius: BorderRadius.circular(15)), child: Center(child: Text(text, style: const TextStyle(color: Colors.grey))));
+  }
+
+  void _showAvatarPicker() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1A212E),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (context) => Container(
+        padding: const EdgeInsets.all(25),
+        height: 250,
+        child: Column(
+          children: [
+            const Text("SELECT ENTITY ICON", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, letterSpacing: 1)),
+            const SizedBox(height: 20),
+            Expanded(
+              child: _unlockedAvatars.isEmpty 
+                ? const Center(child: Text("No icons unlocked yet.\nUse REPAIR CORE to earn points!", textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)))
+                : ListView(
+                    scrollDirection: Axis.horizontal,
+                    children: _unlockedAvatars.map((url) => GestureDetector(
+                      onTap: () { setState(() => _currentAvatarUrl = url); Navigator.pop(context); },
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 10),
+                        child: CircleAvatar(radius: 40, backgroundImage: NetworkImage(url), backgroundColor: Colors.black26),
+                      ),
+                    )).toList(),
+                  ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGuestLock() {
+    return Scaffold(
+      backgroundColor: const Color(0xFF0D1117),
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.lock, size: 80, color: Colors.grey),
+            const SizedBox(height: 20),
+            const Text(
+              "ACCESS DENIED",
+              style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 10),
+            const Text(
+              "Please sign in to view your eco impact profile",
+              style: TextStyle(color: Colors.grey, fontSize: 16),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 30),
+            ElevatedButton(
+              onPressed: () {
+                // Navigate back to login or trigger login
+                Navigator.of(context).pushReplacement(
+                  MaterialPageRoute(builder: (context) => const LoginScreen()),
+                );
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF00E5FF),
+                foregroundColor: Colors.black,
+                padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 15),
+              ),
+              child: const Text("SIGN IN"),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+} // 
