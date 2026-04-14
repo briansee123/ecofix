@@ -1,26 +1,36 @@
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:cloud_firestore/cloud_firestore.dart'; // 1. Add this
+import 'package:firebase_auth/firebase_auth.dart';
 
 class DiagnosisService {
   static const String key = "diagnosis_history";
 
-  // Save diagnosis results from Module A
   static Future<void> saveDiagnosis(String itemName, String issue) async {
     final prefs = await SharedPreferences.getInstance();
     List<String> history = prefs.getStringList(key) ?? [];
     
-    final newEntry = jsonEncode({
+    final data = {
       "name": itemName,
       "issue": issue,
       "timestamp": DateTime.now().toIso8601String(),
-    });
+      "userId": FirebaseAuth.instance.currentUser?.uid ?? "guest",
+    };
 
-    history.insert(0, newEntry); // Put latest at the front
-    if (history.length > 5) history = history.sublist(0, 5); // Keep only last 5 entries
+    // --- NEW: SEND TO FIRESTORE ---
+    try {
+      await FirebaseFirestore.instance.collection('repairs').add(data);
+    } catch (e) {
+      print("Firestore Error: $e");
+    }
+    // ------------------------------
+
+    final newEntry = jsonEncode(data);
+    history.insert(0, newEntry);
+    if (history.length > 5) history = history.sublist(0, 5);
     await prefs.setStringList(key, history);
   }
 
-  // For Module C to read
   static Future<List<Map<String, dynamic>>> getHistory() async {
     final prefs = await SharedPreferences.getInstance();
     List<String> history = prefs.getStringList(key) ?? [];
